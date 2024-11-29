@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   postgres:
-    image: postgres:latest
+    image: postgres:16
     container_name: nerdery-container_2
     environment:
       POSTGRES_USER: postgres
