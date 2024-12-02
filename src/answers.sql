@@ -63,8 +63,11 @@ SELECT
     e.job_title,
     o.name AS office_name,
     co.name AS country_name,
-    s.name AS state_name
+    s.name AS state_name,
+    supervisors.first_name boss_name 
 FROM employees e
 INNER JOIN offices o ON e.office_id = o.id
 INNER JOIN states s ON o.state_id = s.id
 INNER JOIN countries co ON s.country_id = co.id;
+INNER JOIN employees supervisors ON e.supervisor_id = supervisors.id
+WHERE supervisors.first_name IS NOT NULL;
