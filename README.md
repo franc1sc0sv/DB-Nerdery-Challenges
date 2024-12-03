@@ -80,9 +80,10 @@ Now it's your turn to write SQL queries to achieve the following results (You ne
 1. Total money of all the accounts group by types.
 
 ```
-SELECT ac.type, SUM(ac.mount) AS total
-FROM accounts ac
-GROUP BY ac.type;
+SELECT accounts.type, SUM(accounts.mount) AS total
+FROM accounts
+GROUP BY accounts.type;
+
 ```
 
 2. How many users with at least 2 `CURRENT_ACCOUNT`.
@@ -90,20 +91,21 @@ GROUP BY ac.type;
 ```
 SELECT COUNT(*) AS users_with_at_least_two_accounts
 FROM (
-    SELECT ac.user_id
-    FROM accounts ac
-    WHERE ac.type = 'CURRENT_ACCOUNT'
-    GROUP BY ac.user_id
-    HAVING COUNT(ac.type) >= 2
+    SELECT accounts.user_id
+    FROM accounts
+    WHERE accounts.type = 'CURRENT_ACCOUNT'
+    GROUP BY accounts.user_id
+    HAVING COUNT(accounts.type) >= 2
 ) AS subquery;
+
 ```
 
 3. List the top five accounts with more money.
 
 ```
-SELECT ac.id, ac.user_id, ac.type, ac.mount
-FROM accounts ac
-ORDER BY ac.mount DESC
+SELECT accounts.id, accounts.user_id, accounts.type, accounts.mount
+FROM accounts
+ORDER BY accounts.mount DESC
 LIMIT 5;
 ```
 
@@ -114,18 +116,14 @@ WITH user_balances AS (
     SELECT
         a.user_id,
         SUM(CASE
-                WHEN m.type = 'IN' THEN m.mount
-                WHEN m.type = 'TRANSFER' AND m.account_to = a.id THEN m.mount
-                WHEN m.type = 'TRANSFER' AND m.account_from = a.id THEN -m.mount
-                WHEN m.type = 'OUT' THEN -m.mount
-                WHEN m.type = 'OTHER' AND m.account_from = a.id THEN -m.mount
-                WHEN m.type = 'OTHER' AND m.account_to = a.id THEN m.mount
+    			WHEN m.type = 'IN' OR (m.type IN ('TRANSFER', 'OTHER') AND m.account_to = a.id) THEN m.mount
+    			WHEN (m.type IN ('TRANSFER', 'OTHER') AND m.account_from = a.id) OR m.type = 'OUT' THEN -m.mount
                 ELSE 0
             END) + a.mount AS total_balance
     FROM
         accounts a
     LEFT JOIN
-        movements m ON (m.account_from = a.id OR m.account_to = a.id)
+    	movements m ON a.id IN (m.account_from, m.account_to)
     GROUP BY
         a.user_id, a.mount
 )
@@ -143,73 +141,89 @@ LIMIT 3;
 
 5.  In this part you need to create a transaction with the following steps:
 
-        a. First, get the ammount for the account `3b79e403-c788-495a-a8ca-86ad7643afaf` and `fd244313-36e5-4a17-a27c-f8265bc46590` after all their movements.
-        b. Add a new movement with the information:
-            from: `3b79e403-c788-495a-a8ca-86ad7643afaf` make a transfer to `fd244313-36e5-4a17-a27c-f8265bc46590`
-            mount: 50.75
+            a. First, get the ammount for the account `3b79e403-c788-495a-a8ca-86ad7643afaf` and `fd244313-36e5-4a17-a27c-f8265bc46590` after all their movements.
+            b. Add a new movement with the information:
+                from: `3b79e403-c788-495a-a8ca-86ad7643afaf` make a transfer to `fd244313-36e5-4a17-a27c-f8265bc46590`
+                mount: 50.75
 
-        c. Add a new movement with the information:
-            from: `3b79e403-c788-495a-a8ca-86ad7643afaf`
-            type: OUT
-            mount: 731823.56
+            c. Add a new movement with the information:
+                from: `3b79e403-c788-495a-a8ca-86ad7643afaf`
+                type: OUT
+                mount: 731823.56
 
-            * Note: if the account does not have enough money you need to reject this insert and make a rollback for the entire transaction
+                * Note: if the account does not have enough money you need to reject this insert and make a rollback for the entire transaction
 
-            ```
-            DECLARE
-        saldo_origen NUMERIC;
-        saldo_despues_transfer NUMERIC;
+```
 
-    BEGIN
-    BEGIN;
-    -- Calcular el saldo actual de la cuenta origen
-    WITH user_balances AS (
-    SELECT
-    a.user_id,
-    SUM(CASE
-    WHEN m.type = 'IN' THEN m.mount
-    WHEN m.type = 'TRANSFER' AND m.account_to = a.id THEN m.mount
-    WHEN m.type = 'TRANSFER' AND m.account_from = a.id THEN -m.mount
-    WHEN m.type = 'OUT' THEN -m.mount
-    WHEN m.type = 'OTHER' AND m.account_from = a.id THEN -m.mount
-    WHEN m.type = 'OTHER' AND m.account_to = a.id THEN m.mount
-    ELSE 0
-    END) + a.mount AS total_balance
-    FROM
-    accounts a
-    LEFT JOIN
-    movements m ON (m.account_from = a.id OR m.account_to = a.id)
-    GROUP BY
-    a.user_id, a.mount
-    )
-    SELECT total_balance INTO saldo_origen
-    FROM user_balances
-    WHERE user_id = '3b79e403-c788-495a-a8ca-86ad7643afaf';
+                CREATE OR REPLACE FUNCTION get_user_balance(user_id_input UUID)
+                RETURNS NUMERIC AS $$
+                DECLARE
+                total_balance NUMERIC;
+                BEGIN
+                SELECT
+                SUM(
+                CASE
+                WHEN m.type = 'IN' OR (m.type IN ('TRANSFER', 'OTHER') AND m.account_to = a.id) THEN m.mount
+                WHEN (m.type IN ('TRANSFER', 'OTHER') AND m.account_from = a.id) OR m.type = 'OUT' THEN -m.mount
+                ELSE 0
+                END
+                ) + a.mount
+                INTO total_balance
+                FROM
+                accounts a
+                LEFT JOIN
+                movements m ON a.id IN (m.account_from, m.account_to)
+                WHERE
+                a.user_id = user_id_input
+                GROUP BY
+                a.user_id, a.mount;
 
-        IF saldo_origen < 50.75 THEN
-            RAISE EXCEPTION 'Saldo insuficiente para la transferencia de 50.75';
-        END IF;
+                    RETURN total_balance;
 
-        INSERT INTO movements (id, account_from, account_to, type, mount, created_at)
-        VALUES (gen_random_uuid(), '3b79e403-c788-495a-a8ca-86ad7643afaf', 'fd244313-36e5-4a17-a27c-f8265bc46590', 'TRANSFER', 50.75, CURRENT_TIMESTAMP);
+                END;
+                $$ LANGUAGE plpgsql;
 
-        saldo_despues_transfer := saldo_origen - 50.75;
+                DO $$
+                DECLARE
+                balance_1 NUMERIC;
+                balance_2 NUMERIC;
+                account_1 UUID := '3b79e403-c788-495a-a8ca-86ad7643afaf';
+                account_2 UUID := 'fd244313-36e5-4a17-a27c-f8265bc46590';
+                transfer_amount NUMERIC := 50.75;
+                out_amount NUMERIC := 731823.56;
+                BEGIN
+                BEGIN
+                balance_1 := calcular_saldo(account_1);
+                balance_2 := calcular_saldo(account_2);
 
-        IF saldo_despues_transfer < 731823.56 THEN
-            RAISE EXCEPTION 'Saldo insuficiente para el movimiento OUT de 731823.56';
-        END IF;
+                RAISE NOTICE 'Opening balance account 1: %, opening balance account 2: %', balance_1, balance_2;
 
-        INSERT INTO movements (id, account_from, account_to, type, mount, created_at)
-        VALUES (gen_random_uuid(), '3b79e403-c788-495a-a8ca-86ad7643afaf', NULL, 'OUT', 731823.56, CURRENT_TIMESTAMP);
+                INSERT INTO movements (id, account_from, account_to, type, mount)
+                VALUES (gen_random_uuid(), account_1, account_2, 'TRANSFER', transfer_amount);
 
-        COMMIT;
+                balance_1 := balance_1 - transfer_amount;
+                balance_2 := balance_2 + transfer_amount;
 
-    EXCEPTION
-    WHEN OTHERS THEN
-    ROLLBACK;
-    RAISE;
-    END $$;
-    ```
+                IF balance_2 < out_amount THEN
+                    RAISE EXCEPTION 'Insufficient balance to carry out the OUT type transaction. Balance available: %, amount required: %.', balance_2, out_amount;
+                END IF;
+
+                INSERT INTO movements (id, account_from, type, mount)
+                VALUES (gen_random_uuid(), account_1, 'OUT', out_amount);
+
+                balance_1 := calcular_saldo(account_1);
+                balance_2 := calcular_saldo(account_2);
+
+                RAISE NOTICE 'Movements inserted correctly. Closing balance account 1: %, closing balance account 2: %', balance_1, balance_2;
+
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RAISE NOTICE 'Error: %', SQLERRM;
+                    RAISE;
+            END;
+
+            END $$;
+```
 
         d. Put your answer here if the transaction fails(YES/NO):
         ```
@@ -218,48 +232,111 @@ LIMIT 3;
 
         e. If the transaction fails, make the correction on step _c_ to avoid the failure:
         ```
-        -- Cambiar el monto a uno que no exceda el saldo
-        INSERT INTO movements (id, account_from, account_to, type, mount, created_at)
-        VALUES (gen_random_uuid(), '3b79e403-c788-495a-a8ca-86ad7643afaf', NULL, 'OUT', 5000.00, CURRENT_TIMESTAMP);
+            CREATE OR REPLACE FUNCTION get_user_balance(user_id_input UUID)
+            RETURNS NUMERIC AS $$
+            DECLARE
+                total_balance NUMERIC;
+            BEGIN
+                SELECT
+                    SUM(
+                        CASE
+                            WHEN m.type = 'IN' OR (m.type IN ('TRANSFER', 'OTHER') AND m.account_to = a.id) THEN m.mount
+                            WHEN (m.type IN ('TRANSFER', 'OTHER') AND m.account_from = a.id) OR m.type = 'OUT' THEN -m.mount
+                            ELSE 0
+                        END
+                    ) + a.mount
+                INTO total_balance
+                FROM
+                    accounts a
+                LEFT JOIN
+                    movements m ON a.id IN (m.account_from, m.account_to)
+                WHERE
+                    a.user_id = user_id_input
+                GROUP BY
+                    a.user_id, a.mount;
+
+                RETURN total_balance;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DO $$
+            DECLARE
+                balance_1 NUMERIC;
+                balance_2 NUMERIC;
+                account_1 UUID := '3b79e403-c788-495a-a8ca-86ad7643afaf';
+                account_2 UUID := 'fd244313-36e5-4a17-a27c-f8265bc46590';
+                transfer_amount NUMERIC := 50.75;
+                out_amount NUMERIC := 731823.56;
+            BEGIN
+                BEGIN
+                    balance_1 := calcular_saldo(account_1);
+                    balance_2 := calcular_saldo(account_2);
+
+                    RAISE NOTICE 'Opening balance account 1: %, opening balance account 2: %', balance_1, balance_2;
+
+                    INSERT INTO movements (id, account_from, account_to, type, mount)
+                    VALUES (gen_random_uuid(), account_1, account_2, 'TRANSFER', transfer_amount);
+
+                    balance_1 := balance_1 - transfer_amount;
+                    balance_2 := balance_2 + transfer_amount;
+
+                    IF balance_2 < out_amount THEN
+                        RAISE EXCEPTION 'Insufficient balance to carry out the OUT type transaction. Balance available: %, amount required: %.', balance_2, out_amount;
+                    END IF;
+
+                    INSERT INTO movements (id, account_from, type, mount)
+                    VALUES (gen_random_uuid(), account_1, 'OUT', out_amount);
+
+                    balance_1 := calcular_saldo(account_1);
+                    balance_2 := calcular_saldo(account_2);
+
+                    RAISE NOTICE 'Movements inserted correctly. Closing balance account 1: %, closing balance account 2: %', balance_1, balance_2;
+
+                EXCEPTION
+                    WHEN OTHERS THEN
+                        RAISE NOTICE 'Error: %', SQLERRM;
+                        RAISE;
+                END;
+            END $$;
         ```
 
         f. Once the transaction is correct, make a commit
         ```
-        IF saldo_despues_transfer < 731823.56 THEN
-            RAISE EXCEPTION 'Saldo insuficiente para el movimiento OUT de 731823.56';
-        END IF;
-
-        INSERT INTO movements (id, account_from, account_to, type, mount, created_at)
-        VALUES (gen_random_uuid(), '3b79e403-c788-495a-a8ca-86ad7643afaf', NULL, 'OUT', 5000.00, CURRENT_TIMESTAMP);
-
-        COMMIT;
+            -- If the balance is not sufficient, reduce the amount_out amount so that it does not cause an error.
         ```
 
         e. How much money the account `fd244313-36e5-4a17-a27c-f8265bc46590` have:
         ```
-            WITH user_balances AS (
-        SELECT
-            a.user_id,
-            SUM(CASE
-                    WHEN m.type = 'IN' THEN m.mount
-                    WHEN m.type = 'TRANSFER' AND m.account_to = a.id THEN m.mount
-                    WHEN m.type = 'TRANSFER' AND m.account_from = a.id THEN -m.mount
-                    WHEN m.type = 'OUT' THEN -m.mount
-                    WHEN m.type = 'OTHER' AND m.account_from = a.id THEN -m.mount
-                    WHEN m.type = 'OTHER' AND m.account_to = a.id THEN m.mount
-                    ELSE 0
-                END) + a.mount AS total_balance
-        FROM
-            accounts a
-        LEFT JOIN
-            movements m ON (m.account_from = a.id OR m.account_to = a.id)
-        GROUP BY
-            a.user_id, a.mount
+            CREATE OR REPLACE FUNCTION get_user_balance(user_id_input UUID)
+            RETURNS NUMERIC AS $$
+            DECLARE
+                total_balance NUMERIC;
+            BEGIN
+                SELECT
+                    SUM(
+                        CASE
+                            WHEN m.type = 'IN' OR (m.type IN ('TRANSFER', 'OTHER') AND m.account_to = a.id) THEN m.mount
+                            WHEN (m.type IN ('TRANSFER', 'OTHER') AND m.account_from = a.id) OR m.type = 'OUT' THEN -m.mount
+                            ELSE 0
+                        END
+                    ) + a.mount
+                INTO total_balance
+                FROM
+                    accounts a
+                LEFT JOIN
+                    movements m ON a.id IN (m.account_from, m.account_to)
+                WHERE
+                    a.user_id = user_id_input
+                GROUP BY
+                    a.user_id, a.mount;
 
-    )
-    SELECT total_balance
-    FROM user_balances
-    WHERE user_id = 'fd244313-36e5-4a17-a27c-f8265bc46590';
+                RETURN total_balance;
+            END;
+            $$ LANGUAGE plpgsql;
+
+
+            SELECT calcular_saldo('fd244313-36e5-4a17-a27c-f8265bc46590');
+
     ```
 
 6.  All the movements and the user information with the account `3b79e403-c788-495a-a8ca-86ad7643afaf`
@@ -304,23 +381,20 @@ LIMIT 1;
 
 ```
 SELECT
-    us.id AS user_id,
-    us.name AS user_name,
-	ac.id AS account_id,
-    ac.type AS account_type,
     mov.id AS movement_id,
-	mov.type AS movement_type,
+    mov.type AS movement_type,
     mov.mount,
     mov.account_from,
     mov.account_to,
-	mov.created_at
+    mov.created_at
 FROM
     movements mov
 INNER JOIN
     accounts ac ON mov.account_from = ac.id OR mov.account_to = ac.id
 INNER JOIN
     users us ON ac.user_id = us.id
-WHERE us.email = 'Kaden.Gusikowski@gmail.com'
+WHERE
+    us.email = 'Kaden.Gusikowski@gmail.com'
 ORDER BY
     ac.type,
     mov.created_at;
